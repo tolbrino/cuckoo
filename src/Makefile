@@ -119,6 +119,9 @@ mean32x8:	cuckoo.h siphash.h mean_miner.hpp mean_miner.cpp Makefile
 mean32sx8:	cuckoo.h siphash.h mean_miner.hpp mean_miner.cpp Makefile
 	$(GPP) -o $@ -mavx2 -DSAVEEDGES -DEXPANDROUND=8 -DCOMPRESSROUND=22 -DXBITS=8 -DNSIPHASH=8 -DEDGEBITS=31 mean_miner.cpp $(LIBS)
 
+mean32sx1:	cuckoo.h siphash.h mean_miner.hpp mean_miner.cpp Makefile
+	$(GPP) -o $@ -DSAVEEDGES -DEXPANDROUND=8 -DCOMPRESSROUND=22 -DXBITS=8 -DNSIPHASH=1 -DEDGEBITS=31 mean_miner.cpp $(LIBS)
+
 lean28:	cuckoo.h siphash.h lean_miner.hpp lean_miner.cpp Makefile
 	$(GPP) -o $@ -DATOMIC -DEDGEBITS=27 lean_miner.cpp $(LIBS)
 
