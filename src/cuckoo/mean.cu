@@ -6,7 +6,14 @@
 #include <string.h>
 #include <vector>
 #include <assert.h>
-#include <sys/time.h> // gettimeofday
+#include <chrono>
+
+#ifdef _WIN32
+#include "../windows/getopt.h"
+#else
+#include <unistd.h>
+#endif
+
 #include "cuckoo.h"
 #include "../crypto/siphash.cuh"
 #include "../crypto/blake2.h"
@@ -17,6 +24,8 @@ typedef uint64_t u64;
 
 typedef u32 node_t;
 typedef u64 nonce_t;
+
+typedef std::chrono::milliseconds ms;
 
 #ifndef XBITS
 #define XBITS ((EDGEBITS-16)/2)
@@ -617,27 +626,25 @@ struct solver_ctx {
 
   int solve() {
     u32 timems,timems2;
-    struct timeval time0, time1;
-
-    gettimeofday(&time0, 0);
+    auto time0 = std::chrono::high_resolution_clock::now();
     u32 nedges = trimmer->trim();
     if (nedges > MAXEDGES) {
       printf("OOPS; losing %d edges beyond MAXEDGES=%d\n", nedges-MAXEDGES, MAXEDGES);
       nedges = MAXEDGES;
     }
     cudaMemcpy(edges, trimmer->bufferB, nedges * 8, cudaMemcpyDeviceToHost);
-    gettimeofday(&time1, 0);
-    timems = (time1.tv_sec-time0.tv_sec)*1000 + (time1.tv_usec-time0.tv_usec)/1000;
-    gettimeofday(&time0, 0);
+    auto time1 = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<ms>(time1 - time0);
+    timems = duration.count();
+    time0 = std::chrono::high_resolution_clock::now();
     findcycles(edges, nedges);
-    gettimeofday(&time1, 0);
-    timems2 = (time1.tv_sec-time0.tv_sec)*1000 + (time1.tv_usec-time0.tv_usec)/1000;
+    time1 = std::chrono::high_resolution_clock::now();
+    duration = std::chrono::duration_cast<ms>(time1 - time0);
+    timems2 = duration.count();
     printf("findcycles edges %d time %d ms total %d ms\n", nedges, timems2, timems+timems2);
     return sols.size() / PROOFSIZE;
   }
 };
-
-#include <unistd.h>
 
 // arbitrary length of header hashed into siphash key
 #define HEADERLEN 80
