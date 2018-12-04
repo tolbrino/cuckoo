@@ -3,15 +3,7 @@ sudo: false
 language: cpp
 env:
   - JOB=cuckoo
-  - JOB=cuckatoo
-  - JOB=java
   - JOB=doc
-matrix:
-  include:
-    - os: osx
-      osx_image: xcode8.3 # [`xcode8.3` is Xcode 8.3.3 on OS X 10.12](https://docs.travis-ci.com/user/reference/osx#OS-X-Version)
-      language: generic
-      env: JOB=java
 addons:
   apt:
     packages:
@@ -25,8 +17,6 @@ before_script:
   - echo "The library path variable value is ${LIBP:?}"
 script:
   - if test cuckoo = "${JOB:?}"; then ( cd src/crypto && env ${LIBV:?}="${LIBP:?}" make && cd ../cuckoo && make; ); fi
-  - if test cuckatoo = "${JOB:?}"; then ( cd src/crypto && env ${LIBV:?}="${LIBP:?}" make && cd ../cuckatoo && make; ); fi
-  - if test java = "${JOB:?}"; then ( cd src/java && make; ); fi
   - if test doc = "${JOB:?}"; then ( cd doc && make cuckoo.pdf; ); fi
 after_success:
   - |
