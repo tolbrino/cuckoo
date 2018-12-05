@@ -315,6 +315,7 @@ int main(int argc, char **argv) {
       exit(0);
     }
 
+    u64 the_nonce = nonce+r;
     cuckoo_hash &cuckoo = *(new cuckoo_hash());
     word_t us[MAXPATHLEN], vs[MAXPATHLEN];
     for (word_t block = 0; block < NEDGES; block += 64) {
@@ -331,7 +332,7 @@ int main(int argc, char **argv) {
             u32 len = nu + nv + 1;
             printf("%4d-cycle found at %d:%d%%\n", len, 0, (u32)(nonce*100L/NEDGES));
             if (len == PROOFSIZE) {
-              printf("Solution");
+              printf("Solution(%jx)", the_nonce);
               std::set<edge> cycle;
               u32 n = 0;
               cycle.insert(edge(*us, *vs));

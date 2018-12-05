@@ -87,7 +87,7 @@ int main(int argc, char **argv) {
     timems = (time1.tv_sec-time0.tv_sec)*1000 + (time1.tv_usec-time0.tv_usec)/1000;
     printf("Time: %d ms\n", timems);
     for (unsigned s = 0; s < ctx.nsols; s++) {
-      printf("Solution");
+      printf("Solution(%jx)", nonce+r);
       for (int i = 0; i < PROOFSIZE; i++)
         printf(" %jx", (uintmax_t)ctx.sols[s][i]);
       printf("\n");
