@@ -86,7 +86,7 @@ int main(int argc, char **argv) {
     printf("Time: %d ms\n", timems);
 
     for (unsigned s = 0; s < nsols; s++) {
-      printf("Solution");
+      printf("Solution(%jx)", nonce+r);
       word_t *prf = &ctx.sols[s * PROOFSIZE];
       for (u32 i = 0; i < PROOFSIZE; i++)
         printf(" %jx", (uintmax_t)prf[i]);

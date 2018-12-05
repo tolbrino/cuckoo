@@ -726,7 +726,7 @@ CALL_CONVENTION int run_solver(SolverCtx* ctx,
     timems = (time1 - time0) / 1000000;
     print_log("Time: %d ms\n", timems);
     for (unsigned s = 0; s < nsols; s++) {
-      print_log("Solution");
+      print_log("Solution(%jx)", nonce+r);
       u32* prf = &ctx->sols[s * PROOFSIZE];
       for (u32 i = 0; i < PROOFSIZE; i++)
         print_log(" %jx", (uintmax_t)prf[i]);
