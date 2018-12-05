@@ -63,7 +63,7 @@ public:
     v0 = vectorize(sk.k0); v1 = vectorize(sk.k1); v2 = vectorize(sk.k2); v3 = vectorize(sk.k3);
   }
   __device__ uint64_t xor_lanes() {
-    return devectorize((v0 ^ v1) ^ (v2  ^ v3));
+    return devectorize(rotl((v0 ^ v1) ^ (v2  ^ v3), 17));
   }
   __device__ void xor_with(const diphash_state &x) {
     v0 ^= x.v0;
@@ -90,5 +90,5 @@ public:
 __device__ uint64_t dipnode(const siphash_keys &sip_keys, const uint32_t nonce, const int uorv) {
   diphash_state v(sip_keys);
   v.hash24((nonce << 1) | uorv);
-  return rotl(v.xor_lanes(), 17) & EDGEMASK;
+  return v.xor_lanes() & EDGEMASK;
 }
