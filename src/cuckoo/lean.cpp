@@ -51,9 +51,9 @@ int main(int argc, char **argv) {
         break;
     }
   }
-  printf("Looking for %d-cycle on cuckoo%d(\"%s\",%ld", PROOFSIZE, EDGEBITS+1, header, nonce);
+  printf("Looking for %d-cycle on cuckoo%d(\"%s\",%llu", PROOFSIZE, EDGEBITS+1, header, nonce);
   if (range > 1)
-    printf("-%ld", nonce+range-1);
+    printf("-%llu", nonce+range-1);
   printf(") with 50%% edges, %d trims, %d threads\n", ntrims, nthreads);
 
   u64 edgeBytes = NEDGES/8, nodeBytes = TWICE_ATOMS*sizeof(atwice);
@@ -87,7 +87,7 @@ int main(int argc, char **argv) {
     timems = (time1.tv_sec-time0.tv_sec)*1000 + (time1.tv_usec-time0.tv_usec)/1000;
     printf("Time: %d ms\n", timems);
     for (unsigned s = 0; s < ctx.nsols; s++) {
-      printf("Solution(%jx)", nonce+r);
+      printf("Solution(%jx)", (uintmax_t)(nonce+r));
       for (int i = 0; i < PROOFSIZE; i++)
         printf(" %jx", (uintmax_t)ctx.sols[s][i]);
       printf("\n");
