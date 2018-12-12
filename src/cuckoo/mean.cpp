@@ -11,7 +11,7 @@
 int main(int argc, char **argv) {
   u32 nthreads = 1;
   u32 ntrims = EDGEBITS > 30 ? 96 : 68;
-  u32 nonce = 0;
+  u64 nonce = 0;
   u32 range = 1;
 #ifdef SAVEEDGES
   bool showcycle = 1;
@@ -43,7 +43,7 @@ int main(int argc, char **argv) {
           sscanf(optarg+2*i, "%2hhx", header+i);
         break;
       case 'n':
-        nonce = atoi(optarg);
+        nonce = strtoull(optarg, NULL, 10);
         break;
       case 'r':
         range = atoi(optarg);
@@ -59,9 +59,9 @@ int main(int argc, char **argv) {
         break;
     }
   }
-  printf("Looking for %d-cycle on cuckoo%d(\"%s\",%d", PROOFSIZE, NODEBITS, header, nonce);
+  printf("Looking for %d-cycle on cuckoo%d(\"%s\",%llu", PROOFSIZE, NODEBITS, header, nonce);
   if (range > 1)
-    printf("-%d", nonce+range-1);
+    printf("-%llu", nonce+range-1);
   printf(") with 50%% edges\n");
 
   solver_ctx ctx(nthreads, ntrims, allrounds, showcycle);
@@ -79,14 +79,14 @@ int main(int argc, char **argv) {
   for (u32 r = 0; r < range; r++) {
     gettimeofday(&time0, 0);
     ctx.setheadernonce(header, sizeof(header), nonce + r);
-    printf("nonce %d k0 k1 k2 k3 %llx %llx %llx %llx\n", nonce+r, ctx.trimmer->sip_keys.k0, ctx.trimmer->sip_keys.k1, ctx.trimmer->sip_keys.k2, ctx.trimmer->sip_keys.k3);
+    printf("nonce %llu k0 k1 k2 k3 %llx %llx %llx %llx\n", nonce+r, ctx.trimmer->sip_keys.k0, ctx.trimmer->sip_keys.k1, ctx.trimmer->sip_keys.k2, ctx.trimmer->sip_keys.k3);
     u32 nsols = ctx.solve();
     gettimeofday(&time1, 0);
     timems = (time1.tv_sec-time0.tv_sec)*1000 + (time1.tv_usec-time0.tv_usec)/1000;
     printf("Time: %d ms\n", timems);
 
     for (unsigned s = 0; s < nsols; s++) {
-      printf("Solution");
+      printf("Solution(%jx)", (uintmax_t)(nonce+r));
       word_t *prf = &ctx.sols[s * PROOFSIZE];
       for (u32 i = 0; i < PROOFSIZE; i++)
         printf(" %jx", (uintmax_t)prf[i]);
