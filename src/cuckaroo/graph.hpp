@@ -7,7 +7,7 @@
 
 typedef word_t proof[PROOFSIZE];
 
-// cuck(at)oo graph with given limit on number of edges (and on single partition nodes)
+// cuck(ar)oo graph with given limit on number of edges (and on single partition nodes)
 template <typename word_t>
 class graph {
 public:
@@ -32,7 +32,7 @@ public:
   proof *sols;
   u32 nsols;
 
-  graph(word_t maxedges, word_t maxnodes, u32 maxsols) : visited(maxedges) {
+  graph(word_t maxedges, word_t maxnodes, u32 maxsols) : visited(2*maxnodes) {
     MAXEDGES = maxedges;
     MAXNODES = maxnodes;
     MAXSOLS = maxsols;
@@ -52,7 +52,7 @@ public:
     delete[] sols;
   }
 
-  graph(word_t maxedges, word_t maxnodes, u32 maxsols, u32 compressbits) : visited(maxedges) {
+  graph(word_t maxedges, word_t maxnodes, u32 maxsols, u32 compressbits) : visited(2*maxnodes) {
     MAXEDGES = maxedges;
     MAXNODES = maxnodes;
     MAXSOLS = maxsols;
@@ -65,7 +65,7 @@ public:
     visited.clear();
   }
 
-  graph(word_t maxedges, word_t maxnodes, u32 maxsols, char *bytes) : visited(maxedges) {
+  graph(word_t maxedges, word_t maxnodes, u32 maxsols, char *bytes) : visited(2*maxnodes) {
     MAXEDGES = maxedges;
     MAXNODES = maxnodes;
     MAXSOLS = maxsols;
@@ -77,7 +77,7 @@ public:
     visited.clear();
   }
 
-  graph(word_t maxedges, word_t maxnodes, u32 maxsols, u32 compressbits, char *bytes) : visited(maxedges) {
+  graph(word_t maxedges, word_t maxnodes, u32 maxsols, u32 compressbits, char *bytes) : visited(2*maxnodes) {
     MAXEDGES = maxedges;
     MAXNODES = maxnodes;
     MAXSOLS = maxsols;
@@ -92,7 +92,6 @@ public:
 
   // total size of new-operated data, excludes sols and visited bitmap of MAXEDGES bits
   uint64_t bytes() {
-    assert(2*MAXNODES && 2*MAXEDGES); // allocation fails for uncompressed EDGEBITS=31
     return sizeof(word_t[2*MAXNODES]) + sizeof(link[2*MAXEDGES]) + (compressu ? 2 * compressu->bytes() : 0);
   }
 
@@ -115,10 +114,10 @@ public:
   }
 
   void cycles_with_link(u32 len, word_t u, word_t dest) {
-    // assert((u>>1) < MAXEDGES);
-    if (visited.test(u >> 1))
+    // printf("cycles_with_link(%d, %x, %x)\n", len, u, dest);
+    if (visited.test(u))
       return;
-    if ((u ^ 1) == dest) {
+    if (u == dest) {
       print_log("  %d-cycle found\n", len);
       if (len == PROOFSIZE && nsols < MAXSOLS) {
         qsort(sols[nsols++], PROOFSIZE, sizeof(word_t), nonce_cmp);
@@ -128,14 +127,14 @@ public:
     }
     if (len == PROOFSIZE)
       return;
-    word_t au1 = adjlist[u ^ 1];
+    word_t au1 = adjlist[u];
     if (au1 != NIL) {
-      visited.set(u >> 1);
+      visited.set(u);
       for (; au1 != NIL; au1 = links[au1].next) {
         sols[nsols][len] = au1/2;
         cycles_with_link(len+1, links[au1 ^ 1].to, dest);
       }
-      visited.reset(u >> 1);
+      visited.reset(u);
     }
   }
 
@@ -143,9 +142,9 @@ public:
     assert(u < MAXNODES);
     assert(v < MAXNODES);
     v += MAXNODES; // distinguish partitions
-    if (adjlist[u ^ 1] != NIL && adjlist[v ^ 1] != NIL) { // possibly part of a cycle
+    if (adjlist[u] != NIL && adjlist[v] != NIL) { // possibly part of a cycle
       sols[nsols][0] = nlinks/2;
-      assert(!visited.test(u >> 1));
+      assert(!visited.test(u));
       cycles_with_link(1, u, v);
     }
     word_t ulink = nlinks++;

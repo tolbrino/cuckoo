@@ -40,8 +40,8 @@ typedef uint64_t u64; // save some typing
 
 const static u64 edgeBytes = NEDGES/8;
 const static u64 nodeBytes = (NEDGES>>PART_BITS)/8;
-const static word_t PART_MASK = (1 << PART_BITS) - 1;
-const static word_t NONPART_BITS = EDGEBITS - PART_BITS;
+const static u32 PART_MASK = (1 << PART_BITS) - 1;
+const static u32 NONPART_BITS = EDGEBITS - PART_BITS;
 const static word_t NONPART_MASK = ((word_t)1 << NONPART_BITS) - 1;
 
 #define NODEBITS (EDGEBITS + 1)
@@ -140,6 +140,7 @@ struct edgetrimmer {
   shrinkingset alive;
   biitmap nonleaf;
   siphash_keys sipkeys, *dipkeys;
+  bool abort;
   bool initsuccess = false;
 
   edgetrimmer(const trimparams _tp) : tp(_tp) {
@@ -157,18 +158,21 @@ struct edgetrimmer {
     checkCudaErrors_V(cudaFree(dt));
     cudaDeviceReset();
   }
-  int trim() {
+  bool trim() {
     cudaMemcpy(dipkeys, &sipkeys, sizeof(sipkeys), cudaMemcpyHostToDevice);
     cudaDeviceSynchronize();
     checkCudaErrors(cudaMemset(alive.bits, 0, edgeBytes));
     for (u32 round=0; round < tp.ntrims; round++) {
       for (u32 part = 0; part <= PART_MASK; part++) {
         checkCudaErrors(cudaMemset(nonleaf.bits, 0, nodeBytes));
+        if (abort) return false;
         count_node_deg<<<tp.blocks,tp.tpb>>>(*dipkeys, dt->alive, dt->nonleaf, round&1, part);
+        if (abort) return false;
         kill_leaf_edges<<<tp.blocks,tp.tpb>>>(*dipkeys, dt->alive, dt->nonleaf, round&1, part);
+        if (abort) return false;
       }
     }
-    return 0;
+    return true;
   }
 };
 
@@ -214,7 +218,9 @@ public:
     struct timeval time0, time1;
     gettimeofday(&time0, 0);
 
-    trimmer.trim();
+    trimmer.abort = false;
+    if (!trimmer.trim()) // trimmer aborted
+      return 0;
 
     cudaMemcpy(bits, trimmer.alive.bits, edgeBytes, cudaMemcpyDeviceToHost);
     u32 nedges = 0;
@@ -253,6 +259,10 @@ public:
     }
     return cg.nsols;
   }
+
+  void abort() {
+    trimmer.abort = true;
+  }
 };
 
 // arbitrary length of header hashed into siphash key
@@ -273,7 +283,6 @@ CALL_CONVENTION int run_solver(SolverCtx* ctx,
                                SolverStats *stats
                                )
 {
-  SHOULD_STOP = false;
   u64 time0, time1;
   u32 timems;
   u32 sumnsols = 0;
@@ -360,6 +369,10 @@ CALL_CONVENTION SolverCtx* create_solver_ctx(SolverParams* params) {
 
 CALL_CONVENTION void destroy_solver_ctx(SolverCtx* ctx) {
   delete ctx;
+}
+
+CALL_CONVENTION void stop_solver(SolverCtx* ctx) {
+  ctx->abort();
 }
 
 CALL_CONVENTION void fill_default_params(SolverParams* params) {
