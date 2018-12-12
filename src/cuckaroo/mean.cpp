@@ -1,4 +1,4 @@
-// Cuckatoo Cycle, a memory-hard proof-of-work
+// Cuckaroo Cycle, a memory-hard proof-of-work
 // Copyright (c) 2013-2019 John Tromp
 
 #include "mean.hpp"
@@ -73,7 +73,7 @@ CALL_CONVENTION int run_solver(SolverCtx* ctx,
 
 CALL_CONVENTION SolverCtx* create_solver_ctx(SolverParams* params) {
   if (params->nthreads == 0) params->nthreads = 1;
-  if (params->ntrims == 0) params->ntrims = EDGEBITS >= 30 ? 96 : 68;
+  if (params->ntrims == 0) params->ntrims = EDGEBITS > 30 ? 96 : 68;
 
   SolverCtx* ctx = new SolverCtx(params->nthreads,
                                  params->ntrims,
@@ -153,7 +153,7 @@ int main(int argc, char **argv) {
 
   SolverCtx* ctx = create_solver_ctx(&params);
 
-  print_log("Looking for %d-cycle on cuckatoo%d(\"%s\",%d", PROOFSIZE, EDGEBITS, header, nonce);
+  print_log("Looking for %d-cycle on cuckaroo%d(\"%s\",%d", PROOFSIZE, EDGEBITS, header, nonce);
   if (range > 1)
     print_log("-%d", nonce+range-1);
   print_log(") with 50%% edges\n");

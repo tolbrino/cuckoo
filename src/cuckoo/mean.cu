@@ -20,7 +20,6 @@
 
 typedef uint8_t u8;
 typedef uint16_t u16;
-typedef uint64_t u64;
 
 typedef u32 node_t;
 typedef u64 nonce_t;
@@ -38,13 +37,13 @@ typedef std::chrono::milliseconds ms;
 const static u32 NX        = 1 << XBITS;
 const static u32 NX2       = NX * NX;
 const static u32 XMASK     = NX - 1;
-const static u32 X2MASK    = NX2 - 1;
 const static u32 YBITS     = XBITS;
 const static u32 NY        = 1 << YBITS;
 const static u32 YZBITS    = EDGEBITS - XBITS;
 const static u32 NYZ       = 1 << YZBITS;
 const static u32 ZBITS     = YZBITS - YBITS;
 const static u32 NZ        = 1 << ZBITS;
+const static u32 ZMASK     = NZ - 1;
 
 #define EPS_A 133/128
 #define EPS_B 85/128
@@ -90,7 +89,7 @@ __global__ void SeedA(const siphash_keys &sipkeys, ulonglong4 * __restrict__ buf
     u32 node1, node0 = dipnode(sipkeys, (u64)nonce, 0);
     if (sizeof(EdgeOut) == sizeof(uint2))
       node1 = dipnode(sipkeys, (u64)nonce, 1);
-    int row = node0 & XMASK;
+    int row = node0 >> YZBITS;
     int counter = min((int)atomicAdd(counters + row, 1), (int)(FLUSHA2-1));
     tmp[row][counter] = make_Edge(nonce, tmp[0][0], node0, node1);
     __syncthreads();
@@ -98,9 +97,10 @@ __global__ void SeedA(const siphash_keys &sipkeys, ulonglong4 * __restrict__ buf
       int localIdx = min(FLUSHA2, counters[row]);
       int newCount = localIdx % FLUSHA;
       int nflush = localIdx - newCount;
-      int cnt = min((int)atomicAdd(indexes + row * NX + col, nflush), (int)(maxOut - nflush));
+      u32 grp = row * NX + col;
+      int cnt = min((int)atomicAdd(indexes + grp, nflush), (int)(maxOut - nflush));
       for (int i = 0; i < nflush; i += TMPPERLL4)
-        buffer[((u64)(row * NX + col) * maxOut + cnt + i) / TMPPERLL4] = *(ulonglong4 *)(&tmp[row][i]);
+        buffer[((u64)grp * maxOut + cnt + i) / TMPPERLL4] = *(ulonglong4 *)(&tmp[row][i]);
       for (int t = 0; t < newCount; t++) {
         tmp[row][t] = tmp[row][t + nflush];
       }
@@ -111,11 +111,12 @@ __global__ void SeedA(const siphash_keys &sipkeys, ulonglong4 * __restrict__ buf
   EdgeOut zero = make_Edge(0, tmp[0][0], 0, 0);
   for (int row = lid; row < NX; row += dim) {
     int localIdx = min(FLUSHA2, counters[row]);
+    u32 grp = row * NX + col;
     for (int j = localIdx; j % TMPPERLL4; j++)
       tmp[row][j] = zero;
     for (int i = 0; i < localIdx; i += TMPPERLL4) {
-      int cnt = min((int)atomicAdd(indexes + row * NX + col, TMPPERLL4), (int)(maxOut - TMPPERLL4));
-      buffer[((u64)(row * NX + col) * maxOut + cnt) / TMPPERLL4] = *(ulonglong4 *)(&tmp[row][i]);
+      int cnt = min((int)atomicAdd(indexes + grp, TMPPERLL4), (int)(maxOut - TMPPERLL4));
+      buffer[((u64)grp * maxOut + cnt) / TMPPERLL4] = *(ulonglong4 *)(&tmp[row][i]);
     }
   }
 }
@@ -145,7 +146,7 @@ __global__ void SeedB(const siphash_keys &sipkeys, const EdgeOut * __restrict__ 
   const int TMPPERLL4 = sizeof(ulonglong4) / sizeof(EdgeOut);
   __shared__ int counters[NX];
 
-  // if (group>=0&&lid==0) printf("group  %d  -\n", group);
+  // if (group>=0&&lid==0) print_log("group  %d  -\n", group);
   for (int col = lid; col < NX; col += dim)
     counters[col] = 0;
   __syncthreads();
@@ -159,35 +160,38 @@ __global__ void SeedB(const siphash_keys &sipkeys, const EdgeOut * __restrict__ 
     if (edgeIndex < bucketEdges) {
       const int index = group * maxOut + edgeIndex;
       EdgeOut edge = __ldg(&source[index]);
-      if (null(edge)) continue;
-      u32 node1 = endpoint(sipkeys, edge, 0);
-      col = (node1 >> XBITS) & XMASK;
-      counter = min((int)atomicAdd(counters + col, 1), (int)(FLUSHB2-1));
-      tmp[col][counter] = edge;
+      if (!null(edge)) {
+        u32 node1 = endpoint(sipkeys, edge, 0);
+        col = (node1 >> ZBITS) & XMASK;
+        counter = min((int)atomicAdd(counters + col, 1), (int)(FLUSHB2-1));
+        tmp[col][counter] = edge;
+      }
     }
     __syncthreads();
     if (counter == FLUSHB-1) {
       int localIdx = min(FLUSHB2, counters[col]);
       int newCount = localIdx % FLUSHB;
       int nflush = localIdx - newCount;
-      int cnt = min((int)atomicAdd(destinationIndexes + row * NX + col, nflush), (int)(maxOut - nflush));
+      u32 grp = row * NX + col;
+      int cnt = min((int)atomicAdd(destinationIndexes + grp, nflush), (int)(maxOut - nflush));
       for (int i = 0; i < nflush; i += TMPPERLL4)
-        destination[((u64)(row * NX + col) * maxOut + cnt + i) / TMPPERLL4] = *(ulonglong4 *)(&tmp[col][i]);
+        destination[((u64)grp * maxOut + cnt + i) / TMPPERLL4] = *(ulonglong4 *)(&tmp[col][i]);
       for (int t = 0; t < newCount; t++) {
         tmp[col][t] = tmp[col][t + nflush];
       }
       counters[col] = newCount;
     }
-    __syncthreads(); 
+    __syncthreads();
   }
   EdgeOut zero = make_Edge(0, tmp[0][0], 0, 0);
   for (int col = lid; col < NX; col += dim) {
     int localIdx = min(FLUSHB2, counters[col]);
+    u32 grp = row * NX + col;
     for (int j = localIdx; j % TMPPERLL4; j++)
       tmp[col][j] = zero;
     for (int i = 0; i < localIdx; i += TMPPERLL4) {
-      int cnt = min((int)atomicAdd(destinationIndexes + row * NX + col, TMPPERLL4), (int)(maxOut - TMPPERLL4));
-      destination[((u64)(row * NX + col) * maxOut + cnt) / TMPPERLL4] = *(ulonglong4 *)(&tmp[col][i]);
+      int cnt = min((int)atomicAdd(destinationIndexes + grp, TMPPERLL4), (int)(maxOut - TMPPERLL4));
+      destination[((u64)grp * maxOut + cnt) / TMPPERLL4] = *(ulonglong4 *)(&tmp[col][i]);
     }
   }
 }
@@ -254,7 +258,7 @@ __global__ void Round(const int round, const siphash_keys &sipkeys, const EdgeIn
       EdgeIn edge = __ldg(&source[index]);
       if (null(edge)) continue;
       u32 node = endpoint(sipkeys, edge, round&1);
-      Increase2bCounter(ecounters, node >> (2*XBITS));
+      Increase2bCounter(ecounters, node & ZMASK);
     }
   }
   __syncthreads();
@@ -265,16 +269,16 @@ __global__ void Round(const int round, const siphash_keys &sipkeys, const EdgeIn
       EdgeIn edge = __ldg(&source[index]);
       if (null(edge)) continue;
       u32 node0 = endpoint(sipkeys, edge, round&1);
-      if (Read2bCounter(ecounters, node0 >> (2*XBITS))) {
+      if (Read2bCounter(ecounters, node0 & ZMASK)) {
         u32 node1 = endpoint(sipkeys, edge, (round&1)^1);
-        const int bucket = node1 & X2MASK;
+        const int bucket = node1 >> ZBITS;
         const int bktIdx = min(atomicAdd(destinationIndexes + bucket, 1), maxOut - 1);
         destination[bucket * maxOut + bktIdx] = (round&1) ? make_Edge(edge, *destination, node1, node0)
                                                           : make_Edge(edge, *destination, node0, node1);
       }
     }
   }
-  // if (group==0&&lid==0) printf("round %d cnt(0,0) %d\n", round, sourceIndexes[0]);
+  // if (group==0&&lid==0) print_log("round %d cnt(0,0) %d\n", round, sourceIndexes[0]);
 }
 
 template<int maxIn>
@@ -292,12 +296,19 @@ __global__ void Tail(const uint2 *source, uint2 *destination, const int *sourceI
     destination[destIdx + lid] = source[group * maxIn + lid];
 }
 
-#define checkCudaErrors(ans) { gpuAssert((ans), __FILE__, __LINE__); }
-inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true) {
+#define checkCudaErrors_V(ans) ({if (gpuAssert((ans), __FILE__, __LINE__) != cudaSuccess) return;})
+#define checkCudaErrors_N(ans) ({if (gpuAssert((ans), __FILE__, __LINE__) != cudaSuccess) return NULL;})
+#define checkCudaErrors(ans) ({int retval = gpuAssert((ans), __FILE__, __LINE__); if (retval != cudaSuccess) return retval;})
+
+inline int gpuAssert(cudaError_t code, const char *file, int line, bool abort=true) {
+  int device_id;
+  cudaGetDevice(&device_id);
   if (code != cudaSuccess) {
-    fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
-    if (abort) exit(code);
+    snprintf(LAST_ERROR_REASON, MAX_NAME_LEN, "Device %d GPUassert: %s %s %d", device_id, cudaGetErrorString(code), file, line);
+    cudaDeviceReset();
+    if (abort) return code;
   }
+  return code;
 }
 
 __global__ void Recovery(const siphash_keys &sipkeys, ulonglong4 *buffer, int *indexes) {
@@ -306,7 +317,7 @@ __global__ void Recovery(const siphash_keys &sipkeys, ulonglong4 *buffer, int *i
   const int nthreads = blockDim.x * gridDim.x;
   const int loops = NEDGES / nthreads;
   __shared__ u32 nonces[PROOFSIZE];
-  
+
   if (lid < PROOFSIZE) nonces[lid] = 0;
   __syncthreads();
   for (int i = 0; i < loops; i++) {
@@ -370,33 +381,36 @@ struct edgetrimmer {
   int *indexesE2;
   u32 hostA[NX * NY];
   u32 *uvnodes;
-  proof sol;
   siphash_keys sipkeys, *dipkeys;
+  bool abort;
+  bool initsuccess = false;
 
-  edgetrimmer(const trimparams _tp) {
+  edgetrimmer(const trimparams _tp) : tp(_tp) {
     tp = _tp;
-    checkCudaErrors(cudaMalloc((void**)&dt, sizeof(edgetrimmer)));
-    checkCudaErrors(cudaMalloc((void**)&uvnodes, PROOFSIZE * 2 * sizeof(u32)));
-    checkCudaErrors(cudaMalloc((void**)&dipkeys, sizeof(siphash_keys)));
-    checkCudaErrors(cudaMalloc((void**)&indexesE, indexesSize));
-    checkCudaErrors(cudaMalloc((void**)&indexesE2, indexesSize));
+    checkCudaErrors_V(cudaMalloc((void**)&dt, sizeof(edgetrimmer)));
+    checkCudaErrors_V(cudaMalloc((void**)&uvnodes, PROOFSIZE * 2 * sizeof(u32)));
+    checkCudaErrors_V(cudaMalloc((void**)&dipkeys, sizeof(siphash_keys)));
+    checkCudaErrors_V(cudaMalloc((void**)&indexesE, indexesSize));
+    checkCudaErrors_V(cudaMalloc((void**)&indexesE2, indexesSize));
     sizeA = ROW_EDGES_A * NX * (tp.expand > 0 ? sizeof(u32) : sizeof(uint2));
     sizeB = ROW_EDGES_B * NX * (tp.expand > 1 ? sizeof(u32) : sizeof(uint2));
     const size_t bufferSize = sizeA + sizeB;
-    checkCudaErrors(cudaMalloc((void**)&bufferA, bufferSize));
+    checkCudaErrors_V(cudaMalloc((void**)&bufferA, bufferSize));
     bufferB  = bufferA + sizeA / sizeof(ulonglong4);
     bufferAB = bufferA + sizeB / sizeof(ulonglong4);
+    cudaMemcpy(dt, this, sizeof(edgetrimmer), cudaMemcpyHostToDevice);
+    initsuccess = true;
   }
   u64 globalbytes() const {
     return (sizeA+sizeB) + 2 * indexesSize + sizeof(siphash_keys) + PROOFSIZE * 2 * sizeof(u32) + sizeof(edgetrimmer);
   }
   ~edgetrimmer() {
-    cudaFree(bufferA);
-    cudaFree(indexesE2);
-    cudaFree(indexesE);
-    cudaFree(dipkeys);
-    cudaFree(uvnodes);
-    cudaFree(dt);
+    checkCudaErrors_V(cudaFree(bufferA));
+    checkCudaErrors_V(cudaFree(indexesE2));
+    checkCudaErrors_V(cudaFree(indexesE));
+    checkCudaErrors_V(cudaFree(dipkeys));
+    checkCudaErrors_V(cudaFree(uvnodes));
+    checkCudaErrors_V(cudaFree(dt));
     cudaDeviceReset();
   }
   u32 trim() {
@@ -405,24 +419,25 @@ struct edgetrimmer {
     cudaEvent_t startall, stopall;
     checkCudaErrors(cudaEventCreate(&startall)); checkCudaErrors(cudaEventCreate(&stopall));
     checkCudaErrors(cudaEventCreate(&start)); checkCudaErrors(cudaEventCreate(&stop));
-  
+
     cudaMemset(indexesE, 0, indexesSize);
     cudaMemset(indexesE2, 0, indexesSize);
     cudaMemcpy(dipkeys, &sipkeys, sizeof(sipkeys), cudaMemcpyHostToDevice);
-  
+
     cudaDeviceSynchronize();
     float durationA, durationB;
     cudaEventRecord(start, NULL);
-  
+
     if (tp.expand == 0)
       SeedA<EDGES_A, uint2><<<tp.genA.blocks, tp.genA.tpb>>>(*dipkeys, bufferAB, (int *)indexesE);
     else
       SeedA<EDGES_A,   u32><<<tp.genA.blocks, tp.genA.tpb>>>(*dipkeys, bufferAB, (int *)indexesE);
-  
+
     checkCudaErrors(cudaDeviceSynchronize()); cudaEventRecord(stop, NULL);
     cudaEventSynchronize(stop); cudaEventElapsedTime(&durationA, start, stop);
+    if (abort) return false;
     cudaEventRecord(start, NULL);
-  
+
     const u32 halfA = sizeA/2 / sizeof(ulonglong4);
     const u32 halfE = NX2 / 2;
     if (tp.expand == 0) {
@@ -435,8 +450,9 @@ struct edgetrimmer {
 
     checkCudaErrors(cudaDeviceSynchronize()); cudaEventRecord(stop, NULL);
     cudaEventSynchronize(stop); cudaEventElapsedTime(&durationB, start, stop);
-    printf("Seeding completed in %.0f + %.0f ms\n", durationA, durationB);
-  
+    print_log("Seeding completed in %.0f + %.0f ms\n", durationA, durationB);
+    if (abort) return false;
+
     cudaMemset(indexesE, 0, indexesSize);
 
     if (tp.expand == 0)
@@ -445,6 +461,7 @@ struct edgetrimmer {
       Round<EDGES_A,   u32, EDGES_B, uint2><<<tp.trim.blocks, tp.trim.tpb>>>(0, *dipkeys, (const   u32 *)bufferA, (uint2 *)bufferB, (const int *)indexesE2, (int *)indexesE); // to .632
     else // tp.expand == 2
       Round<EDGES_A,   u32, EDGES_B,   u32><<<tp.trim.blocks, tp.trim.tpb>>>(0, *dipkeys, (const   u32 *)bufferA, (  u32 *)bufferB, (const int *)indexesE2, (int *)indexesE); // to .632
+    if (abort) return false;
 
     cudaMemset(indexesE2, 0, indexesSize);
 
@@ -453,23 +470,28 @@ struct edgetrimmer {
     else
       Round<EDGES_B,   u32, EDGES_B/2, uint2><<<tp.trim.blocks, tp.trim.tpb>>>(1, *dipkeys, (const   u32 *)bufferB, (uint2 *)bufferA, (const int *)indexesE, (int *)indexesE2); // to .296
 
+    if (abort) return false;
     cudaMemset(indexesE, 0, indexesSize);
     Round<EDGES_B/2, uint2, EDGES_A/4, uint2><<<tp.trim.blocks, tp.trim.tpb>>>(2, *dipkeys, (const uint2 *)bufferA, (uint2 *)bufferB, (const int *)indexesE2, (int *)indexesE); // to .176
+    if (abort) return false;
     cudaMemset(indexesE2, 0, indexesSize);
     Round<EDGES_A/4, uint2, EDGES_B/4, uint2><<<tp.trim.blocks, tp.trim.tpb>>>(3, *dipkeys, (const uint2 *)bufferB, (uint2 *)bufferA, (const int *)indexesE, (int *)indexesE2); // to .117
-  
+
     cudaDeviceSynchronize();
-  
+
     for (int round = 4; round < tp.ntrims; round += 2) {
+      if (abort) return false;
       cudaMemset(indexesE, 0, indexesSize);
       Round<EDGES_B/4, uint2, EDGES_B/4, uint2><<<tp.trim.blocks, tp.trim.tpb>>>(round, *dipkeys,  (const uint2 *)bufferA, (uint2 *)bufferB, (const int *)indexesE2, (int *)indexesE);
+      if (abort) return false;
       cudaMemset(indexesE2, 0, indexesSize);
       Round<EDGES_B/4, uint2, EDGES_B/4, uint2><<<tp.trim.blocks, tp.trim.tpb>>>(round+1, *dipkeys,  (const uint2 *)bufferB, (uint2 *)bufferA, (const int *)indexesE, (int *)indexesE2);
     }
-    
+
+    if (abort) return false;
     cudaMemset(indexesE, 0, indexesSize);
     cudaDeviceSynchronize();
-  
+
     Tail<EDGES_B/4><<<tp.tail.blocks, tp.tail.tpb>>>((const uint2 *)bufferA, (uint2 *)bufferB, (const int *)indexesE2, (int *)indexesE);
     cudaMemcpy(hostA, indexesE, NX * NY * sizeof(u32), cudaMemcpyDeviceToHost);
     cudaDeviceSynchronize();
@@ -527,7 +549,8 @@ int nonce_cmp(const void *a, const void *b) {
 const static u32 MAXEDGES = 0x20000;
 
 struct solver_ctx {
-  edgetrimmer *trimmer;
+  edgetrimmer trimmer;
+  bool mutatenonce;
   uint2 *edges;
   cuckoo_hash *cuckoo;
   uint2 soledges[PROOFSIZE];
@@ -535,21 +558,22 @@ struct solver_ctx {
   u32 us[MAXPATHLEN];
   u32 vs[MAXPATHLEN];
 
-  solver_ctx(const trimparams tp) {
-    trimmer = new edgetrimmer(tp);
+  solver_ctx(const trimparams tp, bool mutate_nonce) : trimmer(tp) {
     edges   = new uint2[MAXEDGES];
     cuckoo  = new cuckoo_hash();
+    mutatenonce = mutate_nonce;
   }
 
   void setheadernonce(char * const headernonce, const u32 len, const u32 nonce) {
-    ((u32 *)headernonce)[len/sizeof(u32)-1] = htole32(nonce); // place nonce at end
-    setheader(headernonce, len, &trimmer->sipkeys);
+    if (mutatenonce) {
+      ((u32 *)headernonce)[len/sizeof(u32)-1] = htole32(nonce); // place nonce at end
+    }
+    setheader(headernonce, len, &trimmer.sipkeys);
     sols.clear();
   }
   ~solver_ctx() {
     delete cuckoo;
     delete[] edges;
-    delete trimmer;
   }
 
   void recordedge(const u32 i, const u32 u2, const u32 v2) {
@@ -567,10 +591,10 @@ struct solver_ctx {
     assert(ni == PROOFSIZE);
     sols.resize(sols.size() + PROOFSIZE);
     cudaMemcpyToSymbol(recoveredges, soledges, sizeof(soledges));
-    cudaMemset(trimmer->indexesE2, 0, trimmer->indexesSize);
-    Recovery<<<trimmer->tp.recover.blocks, trimmer->tp.recover.tpb>>>(*trimmer->dipkeys, trimmer->bufferA, (int *)trimmer->indexesE2);
-    cudaMemcpy(&sols[sols.size()-PROOFSIZE], trimmer->indexesE2, PROOFSIZE * sizeof(u32), cudaMemcpyDeviceToHost);
-    checkCudaErrors(cudaDeviceSynchronize());
+    cudaMemset(trimmer.indexesE2, 0, trimmer.indexesSize);
+    Recovery<<<trimmer.tp.recover.blocks, trimmer.tp.recover.tpb>>>(*trimmer.dipkeys, trimmer.bufferA, (int *)trimmer.indexesE2);
+    cudaMemcpy(&sols[sols.size()-PROOFSIZE], trimmer.indexesE2, PROOFSIZE * sizeof(u32), cudaMemcpyDeviceToHost);
+    checkCudaErrors_V(cudaDeviceSynchronize());
     qsort(&sols[sols.size()-PROOFSIZE], PROOFSIZE, sizeof(u32), nonce_cmp);
   }
 
@@ -580,10 +604,10 @@ struct solver_ctx {
       if (nu >= MAXPATHLEN) {
         while (nu-- && us[nu] != u) ;
         if (~nu) {
-          printf("illegal %4d-cycle from node %d\n", MAXPATHLEN-nu, u0);
+          print_log("illegal %4d-cycle from node %d\n", MAXPATHLEN-nu, u0);
           exit(0);
         }
-        printf("maximum path length exceeded\n");
+        print_log("maximum path length exceeded\n");
         return 0; // happens once in a million runs or so; signal trouble
       }
       us[nu++] = u;
@@ -597,15 +621,15 @@ struct solver_ctx {
       u32 nu = path(u0, us), nv = path(v0, vs);
       if (!nu-- || !nv--)
         return; // drop edge causing trouble
-      // printf("vx %02x ux %02x e %08x uxyz %06x vxyz %06x u0 %x v0 %x nu %d nv %d\n", vx, ux, e, uxyz, vxyz, u0, v0, nu, nv);
+      // print_log("vx %02x ux %02x e %08x uxyz %06x vxyz %06x u0 %x v0 %x nu %d nv %d\n", vx, ux, e, uxyz, vxyz, u0, v0, nu, nv);
       if (us[nu] == vs[nv]) {
         const u32 min = nu < nv ? nu : nv;
         for (nu -= min, nv -= min; us[nu] != vs[nv]; nu++, nv++) ;
         const u32 len = nu + nv + 1;
-        printf("%4d-cycle found\n", len);
+        print_log("%4d-cycle found\n", len);
         if (len == PROOFSIZE)
           solution(us, nu, vs, nv);
-        // if (len == 2) printf("edge %x %x\n", edge.x, edge.y);
+        // if (len == 2) print_log("edge %x %x\n", edge.x, edge.y);
       } else if (nu < nv) {
         while (nu--)
           cuckoo->set(us[nu+1], us[nu]);
@@ -627,12 +651,16 @@ struct solver_ctx {
   int solve() {
     u32 timems,timems2;
     auto time0 = std::chrono::high_resolution_clock::now();
-    u32 nedges = trimmer->trim();
+
+    trimmer.abort = false;
+    u32 nedges = trimmer.trim();
+    if (!nedges)
+      return 0;
     if (nedges > MAXEDGES) {
-      printf("OOPS; losing %d edges beyond MAXEDGES=%d\n", nedges-MAXEDGES, MAXEDGES);
+      print_log("OOPS; losing %d edges beyond MAXEDGES=%d\n", nedges-MAXEDGES, MAXEDGES);
       nedges = MAXEDGES;
     }
-    cudaMemcpy(edges, trimmer->bufferB, nedges * 8, cudaMemcpyDeviceToHost);
+    cudaMemcpy(edges, trimmer.bufferB, nedges * 8, cudaMemcpyDeviceToHost);
     auto time1 = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<ms>(time1 - time0);
     timems = duration.count();
@@ -641,13 +669,154 @@ struct solver_ctx {
     time1 = std::chrono::high_resolution_clock::now();
     duration = std::chrono::duration_cast<ms>(time1 - time0);
     timems2 = duration.count();
-    printf("findcycles edges %d time %d ms total %d ms\n", nedges, timems2, timems+timems2);
+    print_log("findcycles edges %d time %d ms total %d ms\n", nedges, timems2, timems+timems2);
     return sols.size() / PROOFSIZE;
+  }
+
+  void abort() {
+    trimmer.abort = true;
   }
 };
 
 // arbitrary length of header hashed into siphash key
 #define HEADERLEN 80
+
+typedef solver_ctx SolverCtx;
+
+CALL_CONVENTION int run_solver(SolverCtx* ctx,
+                               char* header,
+                               int header_length,
+                               u32 nonce,
+                               u32 range,
+                               SolverSolutions *solutions,
+                               SolverStats *stats
+                               )
+{
+  u64 time0, time1;
+  u32 timems;
+  u32 sumnsols = 0;
+  int device_id;
+  if (stats != NULL) {
+    cudaGetDevice(&device_id);
+    cudaDeviceProp props;
+    cudaGetDeviceProperties(&props, stats->device_id);
+    stats->device_id = device_id;
+    stats->edge_bits = EDGEBITS;
+    strncpy(stats->device_name, props.name, MAX_NAME_LEN);
+  }
+
+  if (ctx == NULL || !ctx->trimmer.initsuccess){
+    print_log("Error initialising trimmer. Aborting.\n");
+    print_log("Reason: %s\n", LAST_ERROR_REASON);
+    if (stats != NULL) {
+       stats->has_errored = true;
+       strncpy(stats->error_reason, LAST_ERROR_REASON, MAX_NAME_LEN);
+    }
+    return 0;
+  }
+
+  for (u32 r = 0; r < range; r++) {
+    time0 = timestamp();
+    ctx->setheadernonce(header, header_length, nonce + r);
+    print_log("nonce %d k0 k1 k2 k3 %llx %llx %llx %llx\n", nonce+r, ctx->trimmer.sipkeys.k0, ctx->trimmer.sipkeys.k1, ctx->trimmer.sipkeys.k2, ctx->trimmer.sipkeys.k3);
+    u32 nsols = ctx->solve();
+    time1 = timestamp();
+    timems = (time1 - time0) / 1000000;
+    print_log("Time: %d ms\n", timems);
+    for (unsigned s = 0; s < nsols; s++) {
+      print_log("Solution");
+      u32* prf = &ctx->sols[s * PROOFSIZE];
+      for (u32 i = 0; i < PROOFSIZE; i++)
+        print_log(" %jx", (uintmax_t)prf[i]);
+      print_log("\n");
+      if (solutions != NULL){
+        solutions->edge_bits = EDGEBITS;
+        solutions->num_sols++;
+        solutions->sols[sumnsols+s].nonce = nonce + r;
+        for (u32 i = 0; i < PROOFSIZE; i++)
+          solutions->sols[sumnsols+s].proof[i] = (u64) prf[i];
+      }
+      int pow_rc = verify(prf, &ctx->trimmer.sipkeys);
+      if (pow_rc == POW_OK) {
+        print_log("Verified with cyclehash ");
+        unsigned char cyclehash[32];
+        blake2b((void *)cyclehash, sizeof(cyclehash), (const void *)prf, sizeof(proof), 0, 0);
+        for (int i=0; i<32; i++)
+          print_log("%02x", cyclehash[i]);
+        print_log("\n");
+      } else {
+        print_log("FAILED due to %s\n", errstr[pow_rc]);
+      }
+    }
+    sumnsols += nsols;
+    if (stats != NULL) {
+      stats->last_start_time = time0;
+      stats->last_end_time = time1;
+      stats->last_solution_time = time1 - time0;
+    }
+  }
+  print_log("%d total solutions\n", sumnsols);
+  return sumnsols > 0;
+}
+
+CALL_CONVENTION SolverCtx* create_solver_ctx(SolverParams* params) {
+  trimparams tp;
+  tp.ntrims = params->ntrims;
+  tp.expand = params->expand;
+  tp.genA.blocks = params->genablocks;
+  tp.genA.tpb = params->genatpb;
+  tp.genB.tpb = params->genbtpb;
+  tp.trim.tpb = params->trimtpb;
+  tp.tail.tpb = params->tailtpb;
+  tp.recover.blocks = params->recoverblocks;
+  tp.recover.tpb = params->recovertpb;
+
+  cudaDeviceProp prop;
+  checkCudaErrors_N(cudaGetDeviceProperties(&prop, params->device));
+
+  assert(tp.genA.tpb <= prop.maxThreadsPerBlock);
+  assert(tp.genB.tpb <= prop.maxThreadsPerBlock);
+  assert(tp.trim.tpb <= prop.maxThreadsPerBlock);
+  // assert(tp.tailblocks <= prop.threadDims[0]);
+  assert(tp.tail.tpb <= prop.maxThreadsPerBlock);
+  assert(tp.recover.tpb <= prop.maxThreadsPerBlock);
+
+  assert(tp.genA.blocks * tp.genA.tpb <= NEDGES); // check THREADS_HAVE_EDGES
+  assert(tp.recover.blocks * tp.recover.tpb <= NEDGES); // check THREADS_HAVE_EDGES
+  assert(tp.genA.tpb / NX <= FLUSHA); // check ROWS_LIMIT_LOSSES
+  assert(tp.genA.tpb / NX <= FLUSHA); // check COLS_LIMIT_LOSSES
+
+  cudaSetDevice(params->device);
+  if (!params->cpuload)
+    checkCudaErrors_N(cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync));
+
+  SolverCtx* ctx = new SolverCtx(tp, params->mutate_nonce);
+
+  return ctx;
+}
+
+CALL_CONVENTION void destroy_solver_ctx(SolverCtx* ctx) {
+  delete ctx;
+}
+
+CALL_CONVENTION void stop_solver(SolverCtx* ctx) {
+  ctx->abort();
+}
+
+CALL_CONVENTION void fill_default_params(SolverParams* params) {
+  trimparams tp;
+  params->device = 0;
+  params->ntrims = tp.ntrims;
+  params->expand = tp.expand;
+  params->genablocks = tp.genA.blocks;
+  params->genatpb = tp.genA.tpb;
+  params->genbtpb = tp.genB.tpb;
+  params->trimtpb = tp.trim.tpb;
+  params->tailtpb = tp.tail.tpb;
+  params->recoverblocks = tp.recover.blocks;
+  params->recovertpb = tp.recover.tpb;
+  params->cpuload = true;
+}
 
 int main(int argc, char **argv) {
   trimparams tp;
@@ -658,19 +827,26 @@ int main(int argc, char **argv) {
   u32 len;
   int c;
 
+  // set defaults
+  SolverParams params;
+  fill_default_params(&params);
+
   memset(header, 0, sizeof(header));
-  while ((c = getopt(argc, argv, "sb:c:d:E:h:k:m:n:r:U:u:v:w:y:Z:z:")) != -1) {
+  while ((c = getopt(argc, argv, "scb:d:E:h:k:m:n:r:U:u:v:w:y:Z:z:")) != -1) {
     switch (c) {
       case 's':
-        printf("SYNOPSIS\n  cuda%d [-d device] [-E 0-2] [-h hexheader] [-m trims] [-n nonce] [-r range] [-U seedAblocks] [-u seedAthreads] [-v seedBthreads] [-w Trimthreads] [-y Tailthreads] [-Z recoverblocks] [-z recoverthreads]\n", NODEBITS);
-        printf("DEFAULTS\n  cuda%d -d %d -E %d -h \"\" -m %d -n %d -r %d -U %d -u %d -v %d -w %d -y %d -Z %d -z %d\n", NODEBITS, device, tp.expand, tp.ntrims, nonce, range, tp.genA.blocks, tp.genA.tpb, tp.genB.tpb, tp.trim.tpb, tp.tail.tpb, tp.recover.blocks, tp.recover.tpb);
+        print_log("SYNOPSIS\n  cuda%d [-s] [-c] [-d device] [-E 0-2] [-h hexheader] [-m trims] [-n nonce] [-r range] [-U seedAblocks] [-u seedAthreads] [-v seedBthreads] [-w Trimthreads] [-y Tailthreads] [-Z recoverblocks] [-z recoverthreads]\n", NODEBITS);
+        print_log("DEFAULTS\n  cuda%d -d %d -E %d -h \"\" -m %d -n %d -r %d -U %d -u %d -v %d -w %d -y %d -Z %d -z %d\n", NODEBITS, device, tp.expand, tp.ntrims, nonce, range, tp.genA.blocks, tp.genA.tpb, tp.genB.tpb, tp.trim.tpb, tp.tail.tpb, tp.recover.blocks, tp.recover.tpb);
         exit(0);
+      case 'c':
+        params.cpuload = false;
+        break;
       case 'd':
-        device = atoi(optarg);
+        params.device = atoi(optarg);
         break;
       case 'E':
-        tp.expand = atoi(optarg);
-        assert(tp.expand <= 2);
+        params.expand = atoi(optarg);
+        assert(params.expand <= 2);
         break;
       case 'h':
         len = strlen(optarg)/2;
@@ -682,31 +858,31 @@ int main(int argc, char **argv) {
         nonce = atoi(optarg);
         break;
       case 'm':
-        tp.ntrims = atoi(optarg) & -2; // make even as required by solve()
+        params.ntrims = atoi(optarg) & -2; // make even as required by solve()
         break;
       case 'r':
         range = atoi(optarg);
         break;
       case 'U':
-        tp.genA.blocks = atoi(optarg);
+        params.genablocks = atoi(optarg);
         break;
       case 'u':
-        tp.genA.tpb = atoi(optarg);
+        params.genatpb = atoi(optarg);
         break;
       case 'v':
-        tp.genB.tpb = atoi(optarg);
+        params.genbtpb = atoi(optarg);
         break;
       case 'w':
-        tp.trim.tpb = atoi(optarg);
+        params.trimtpb = atoi(optarg);
         break;
       case 'y':
-        tp.tail.tpb = atoi(optarg);
+        params.tailtpb = atoi(optarg);
         break;
       case 'Z':
-        tp.recover.blocks = atoi(optarg);
+        params.recoverblocks = atoi(optarg);
         break;
       case 'z':
-        tp.recover.tpb = atoi(optarg);
+        params.recovertpb = atoi(optarg);
         break;
     }
   }
@@ -715,56 +891,24 @@ int main(int argc, char **argv) {
   assert(device < nDevices);
   cudaDeviceProp prop;
   checkCudaErrors(cudaGetDeviceProperties(&prop, device));
-  assert(tp.genA.tpb <= prop.maxThreadsPerBlock);
-  assert(tp.genB.tpb <= prop.maxThreadsPerBlock);
-  assert(tp.trim.tpb <= prop.maxThreadsPerBlock);
-  // assert(tp.tailblocks <= prop.threadDims[0]);
-  assert(tp.tail.tpb <= prop.maxThreadsPerBlock);
-  assert(tp.recover.tpb <= prop.maxThreadsPerBlock);
   u64 dbytes = prop.totalGlobalMem;
   int dunit;
   for (dunit=0; dbytes >= 10240; dbytes>>=10,dunit++) ;
-  printf("%s with %d%cB @ %d bits x %dMHz\n", prop.name, (u32)dbytes, " KMGT"[dunit], prop.memoryBusWidth, prop.memoryClockRate/1000);
-  cudaSetDevice(device);
+  print_log("%s with %d%cB @ %d bits x %dMHz\n", prop.name, (u32)dbytes, " KMGT"[dunit], prop.memoryBusWidth, prop.memoryClockRate/1000);
 
-  printf("Looking for %d-cycle on cuckoo%d(\"%s\",%d", PROOFSIZE, NODEBITS, header, nonce);
+  print_log("Looking for %d-cycle on cuckoo%d(\"%s\",%d", PROOFSIZE, NODEBITS, header, nonce);
   if (range > 1)
-    printf("-%d", nonce+range-1);
-  printf(") with 50%% edges, %d*%d buckets, %d trims, and %d thread blocks.\n", NX, NY, tp.ntrims, NX);
+    print_log("-%d", nonce+range-1);
+  print_log(") with 50%% edges, %d*%d buckets, %d trims, and %d thread blocks.\n", NX, NY, params.ntrims, NX);
 
-  solver_ctx ctx(tp);
+  SolverCtx* ctx = create_solver_ctx(&params);
 
-  u64 bytes = ctx.trimmer->globalbytes();
+  u64 bytes = ctx->trimmer.globalbytes();
   int unit;
   for (unit=0; bytes >= 10240; bytes>>=10,unit++) ;
-  printf("Using %d%cB of global memory.\n", (u32)bytes, " KMGT"[unit]);
+  print_log("Using %d%cB of global memory.\n", (u32)bytes, " KMGT"[unit]);
 
-  cudaSetDevice(device);
-  u32 sumnsols = 0;
-  for (int r = 0; r < range; r++) {
-    ctx.setheadernonce(header, sizeof(header), nonce + r);
-    printf("nonce %d k0 k1 k2 k3 %llx %llx %llx %llx\n", nonce+r, ctx.trimmer->sipkeys.k0, ctx.trimmer->sipkeys.k1, ctx.trimmer->sipkeys.k2, ctx.trimmer->sipkeys.k3);
-    u32 nsols = ctx.solve();
-    for (unsigned s = 0; s < nsols; s++) {
-      printf("Solution");
-      u32* prf = &ctx.sols[s * PROOFSIZE];
-      for (u32 i = 0; i < PROOFSIZE; i++)
-        printf(" %jx", (uintmax_t)prf[i]);
-      printf("\n");
-      int pow_rc = verify(prf, &ctx.trimmer->sipkeys);
-      if (pow_rc == POW_OK) {
-        printf("Verified with cyclehash ");
-        unsigned char cyclehash[32];
-        blake2b((void *)cyclehash, sizeof(cyclehash), (const void *)prf, sizeof(proof), 0, 0);
-        for (int i=0; i<32; i++)
-          printf("%02x", cyclehash[i]);
-        printf("\n");
-      } else {
-        printf("FAILED due to %s\n", errstr[pow_rc]);
-      }
-    }
-    sumnsols += nsols;
-  }
-  printf("%d total solutions\n", sumnsols);
+  run_solver(ctx, header, sizeof(header), nonce, range, NULL, NULL);
+
   return 0;
 }

@@ -11,9 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
-#ifdef __APPLE__
-#include "../apple/osx_barrier.h"
-#endif
+#include "../threads/barrier.hpp"
 #include <assert.h>
 
 typedef uint64_t u64; // save some typing
@@ -89,12 +87,13 @@ public:
   atwice *bits;
 
   twice_set() {
-    bits = (atwice *)calloc(TWICE_ATOMS, sizeof(atwice));
+    bits = new atwice[TWICE_ATOMS];
     assert(bits != 0);
   }
   void clear() {
     assert(bits);
-    memset(bits, 0, TWICE_ATOMS*sizeof(atwice));
+    for (u32 i=0; i < TWICE_ATOMS; i++)
+      bits[i] = 0;
   }
  void prefetch(word_t u) const {
 #ifdef PREFETCH
@@ -121,7 +120,7 @@ public:
 #endif
   }
   ~twice_set() {
-    free(bits);
+    delete[] bits;
   }
 };
 
@@ -177,7 +176,8 @@ public:
 
   cuckoo_hash(void *recycle) {
     cuckoo = (au64 *)recycle;
-    memset(cuckoo, 0, CUCKOO_SIZE*sizeof(au64));
+    for (u32 i=0; i < CUCKOO_SIZE; i++)
+      cuckoo[i] = 0;
   }
   void set(word_t u, word_t v) {
     u64 niew = (u64)u << NODEBITS | v;
@@ -228,16 +228,14 @@ public:
   au32 nsols;
   u32 nthreads;
   u32 ntrims;
-  pthread_barrier_t barry;
+  trim_barrier barry;
 
-  cuckoo_ctx(u32 n_threads, u32 n_trims, u32 max_sols) {
+  cuckoo_ctx(u32 n_threads, u32 n_trims, u32 max_sols) : barry(n_threads) {
     nthreads = n_threads;
     alive = new shrinkingset(nthreads);
     cuckoo = 0;
     nonleaf = new twice_set;
     ntrims = n_trims;
-    int err = pthread_barrier_init(&barry, NULL, nthreads);
-    assert(err == 0);
     sols = (word_t (*)[PROOFSIZE])calloc(maxsols = max_sols, PROOFSIZE*sizeof(word_t));
     assert(sols != 0);
     nsols = 0;
@@ -253,6 +251,12 @@ public:
     delete alive;
     delete nonleaf;
     delete cuckoo;
+  }
+  void barrier() {
+    barry.wait();
+  }
+  void abort() {
+    barry.abort();
   }
   void prefetch(const u64 *hashes, const u32 part) const {
     for (u32 i=0; i < NSIPHASH; i++) {
@@ -384,14 +388,6 @@ typedef struct {
   cuckoo_ctx *ctx;
 } thread_ctx;
 
-void barrier(pthread_barrier_t *barry) {
-  int rc = pthread_barrier_wait(barry);
-  if (rc != 0 && rc != PTHREAD_BARRIER_SERIAL_THREAD) {
-    printf("Could not wait on barrier\n");
-    pthread_exit(NULL);
-  }
-}
-
 u32 path(cuckoo_hash &cuckoo, word_t u, word_t *us) {
   u32 nu;
   for (nu = 0; u; u = cuckoo[u]) {
@@ -412,26 +408,20 @@ void *worker(void *vp) {
   cuckoo_ctx *ctx = tp->ctx;
 
   shrinkingset *alive = ctx->alive;
-  if (tp->id == 0)
-    printf("initial size %d\n", NEDGES);
-  for (u32 round=1; round <= ctx->ntrims; round++) {
-    if (tp->id == 0) printf("round %2d partition sizes", round);
-    for (u32 uorv = 0; uorv < 2; uorv++) {
-      for (u32 part = 0; part <= PART_MASK; part++) {
-        if (tp->id == 0)
-          ctx->nonleaf->clear(); // clear all counts
-        barrier(&ctx->barry);
-        ctx->count_node_deg(tp->id,uorv,part);
-        barrier(&ctx->barry);
-        ctx->kill_leaf_edges(tp->id,uorv,part);
-        barrier(&ctx->barry);
-        if (tp->id == 0) {
-          u32 size = alive->count();
-          printf(" %c%d %d", "UV"[uorv], part, size);
-        }
-      }
+  // if (tp->id == 0) printf("initial size %d\n", NEDGES);
+  for (u32 round=0; round < ctx->ntrims; round++) {
+    // if (tp->id == 0) printf("round %2d partition sizes", round);
+    for (u32 part = 0; part <= PART_MASK; part++) {
+      if (tp->id == 0)
+        ctx->nonleaf->clear(); // clear all counts
+      ctx->barrier();
+      ctx->count_node_deg(tp->id,round&1,part);
+      ctx->barrier();
+      ctx->kill_leaf_edges(tp->id,round&1,part);
+      ctx->barrier();
+      // if (tp->id == 0) printf(" %c%d %d", "UV"[round&1], part, alive->count());
     }
-    if (tp->id == 0) printf("\n");
+    // if (tp->id == 0) printf("\n");
   }
   if (tp->id == 0) {
     u32 load = (u32)(100LL * alive->count() / CUCKOO_SIZE);
@@ -445,7 +435,7 @@ void *worker(void *vp) {
 #ifdef SINGLECYCLING
   else pthread_exit(NULL);
 #else
-  barrier(&ctx->barry);
+  ctx->barrier();
 #endif
   cuckoo_hash &cuckoo = *ctx->cuckoo;
   word_t us[MAXPATHLEN], vs[MAXPATHLEN];
