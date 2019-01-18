@@ -277,8 +277,7 @@ int main(int argc, char **argv) {
   checkCudaErrors(cudaMalloc((void**)&device_ctx, sizeof(cuckoo_ctx)));
 
   cudaEvent_t start, stop;
-  checkCudaErrors(cudaEventCreate(&start));
-  checkCudaErrors(cudaEventCreate(&stop));
+  checkCudaErrors(cudaEventCreate(&start)); checkCudaErrors(cudaEventCreate(&stop));
   for (int r = 0; r < range; r++) {
     cudaEventRecord(start, NULL);
     checkCudaErrors(cudaMemset(ctx.alive.bits, 0, edgeBytes));
@@ -299,10 +298,9 @@ int main(int argc, char **argv) {
     assert(bits != 0);
     cudaMemcpy(bits, ctx.alive.bits, (NEDGES/64) * sizeof(u64), cudaMemcpyDeviceToHost);
 
-    cudaEventRecord(stop, NULL);
-    cudaEventSynchronize(stop);
+    checkCudaErrors(cudaDeviceSynchronize()); cudaEventRecord(stop, NULL);
     float duration;
-    cudaEventElapsedTime(&duration, start, stop);
+    cudaEventSynchronize(stop); cudaEventElapsedTime(&duration, start, stop);
     u32 cnt = 0;
     for (int i = 0; i < NEDGES/64; i++)
       cnt += __builtin_popcountll(~bits[i]);
@@ -372,6 +370,7 @@ int main(int argc, char **argv) {
       }
     }
   }
+  checkCudaErrors(cudaEventDestroy(start)); checkCudaErrors(cudaEventDestroy(stop));
   checkCudaErrors(cudaFree(ctx.alive.bits));
   checkCudaErrors(cudaFree(ctx.nonleaf.bits));
   return 0;

@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
-#include <sys/time.h> // gettimeofday
 #include <set>
 
 #ifndef MAXSOLS
@@ -38,11 +37,11 @@ typedef uint64_t u64; // save some typing
 #endif
 #define MAXEDGES (NEDGES >> IDXSHIFT)
 
-const static u64 edgeBytes = NEDGES/8;
-const static u64 nodeBytes = (NEDGES>>PART_BITS)/8;
-const static u32 PART_MASK = (1 << PART_BITS) - 1;
-const static u32 NONPART_BITS = EDGEBITS - PART_BITS;
-const static word_t NONPART_MASK = ((word_t)1 << NONPART_BITS) - 1;
+const u64 edgeBytes = NEDGES/8;
+const u64 nodeBytes = (NEDGES>>PART_BITS)/8;
+const u32 PART_MASK = (1 << PART_BITS) - 1;
+const u32 NONPART_BITS = EDGEBITS - PART_BITS;
+const word_t NONPART_MASK = ((word_t)1 << NONPART_BITS) - 1;
 
 #define NODEBITS (EDGEBITS + 1)
 #define NNODES (2 * NEDGES)
@@ -56,7 +55,7 @@ inline int gpuAssert(cudaError_t code, const char *file, int line, bool abort=tr
   int device_id;
   cudaGetDevice(&device_id);
   if (code != cudaSuccess) {
-    snprintf(LAST_ERROR_REASON, MAX_NAME_LEN, "Device %d GPUassert: %s %s %d\0", device_id, cudaGetErrorString(code), file, line);
+    snprintf(LAST_ERROR_REASON, MAX_NAME_LEN, "Device %d GPUassert: %s %s %d", device_id, cudaGetErrorString(code), file, line);
     cudaDeviceReset();
     if (abort) return code;
   }
@@ -214,9 +213,9 @@ public:
   }
 
   int solve() {
+    u64 time0, time1;
     u32 timems,timems2;
-    struct timeval time0, time1;
-    gettimeofday(&time0, 0);
+    time0 = timestamp();
 
     trimmer.abort = false;
     if (!trimmer.trim()) // trimmer aborted
@@ -230,14 +229,11 @@ public:
       print_log("overloaded! exiting...");
       exit(0);
     }
-    gettimeofday(&time1, 0);
-    timems = (time1.tv_sec-time0.tv_sec)*1000 + (time1.tv_usec-time0.tv_usec)/1000;
-    gettimeofday(&time0, 0);
-
+    time1 = timestamp(); timems  = (time1 - time0) / 1000000;
+    time0 = timestamp();
     findcycles();
+    time1 = timestamp(); timems2 = (time1 - time0) / 1000000;
 
-    gettimeofday(&time1, 0);
-    timems2 = (time1.tv_sec-time0.tv_sec)*1000 + (time1.tv_usec-time0.tv_usec)/1000;
     print_log("%d trims %d ms %d edges %d ms total %d ms\n", trimmer.tp.ntrims, timems, nedges, timems2, timems+timems2);
 
     for (u32 s=0; s < cg.nsols; s++) {
@@ -311,8 +307,7 @@ CALL_CONVENTION int run_solver(SolverCtx* ctx,
     ctx->setheadernonce(header, header_length, nonce + r);
     print_log("nonce %d k0 k1 k2 k3 %llx %llx %llx %llx\n", nonce+r, ctx->trimmer.sipkeys.k0, ctx->trimmer.sipkeys.k1, ctx->trimmer.sipkeys.k2, ctx->trimmer.sipkeys.k3);
     u32 nsols = ctx->solve();
-    time1 = timestamp();
-    timems = (time1 - time0) / 1000000;
+    time1 = timestamp(); timems = (time1 - time0) / 1000000;
     print_log("Time: %d ms\n", timems);
     for (u32 s = 0; s < nsols; s++) {
       print_log("Solution");
@@ -397,14 +392,14 @@ int main(int argc, char **argv) {
   fill_default_params(&params);
 
   memset(header, 0, sizeof(header));
-  while ((c = getopt (argc, argv, "sb:h:n:m:r:t:")) != -1) {
+  while ((c = getopt (argc, argv, "sb:d:h:n:m:r:t:")) != -1) {
     switch (c) {
       case 's':
         print_log("SYNOPSIS\n  lcuda%d [-d device] [-h hexheader] [-m trims] [-n nonce] [-r range] [-b blocks] [-t threads]\n", NODEBITS);
         print_log("DEFAULTS\n  cuda%d -d %d -h \"\" -m %d -n %d -r %d -b %d -t %d\n", NODEBITS, device, tp.ntrims, nonce, range, tp.blocks, tp.tpb);
         exit(0);
       case 'd':
-        params.device = atoi(optarg);
+        device = params.device = atoi(optarg);
         break;
       case 'h':
         len = strlen(optarg)/2;

@@ -1,5 +1,6 @@
 #ifndef INCLUDE_SIPHASHXN_H
 #define INCLUDE_SIPHASHXN_H
+#include <immintrin.h> // for _mm256_* intrinsics
 
 #ifdef __AVX2__
 
@@ -51,7 +52,7 @@
     v3 = XOR(v3,v0); v7 = XOR(v7,v4); \
     v2 = ROT32(v2);  v6 = ROT32(v6); \
   } while(0)
- 
+
 #define SIPROUNDX4N \
   do { \
     v0 = ADD(v0,v1); v4 = ADD(v4,v5);  v8 = ADD(v8,v9); vC = ADD(vC,vD); \
@@ -128,10 +129,10 @@ void siphash24x16(const siphash_keys *keys, const uint64_t *indices, uint64_t *h
   vA = XOR(vA,_mm256_set1_epi64x(0xffLL));
   vE = XOR(vE,_mm256_set1_epi64x(0xffLL));
   SIPROUNDX4N; SIPROUNDX4N; SIPROUNDX4N; SIPROUNDX4N;
-  _mm256_store_si256((__m256i *) hashes    , XOR(XOR(v0,v1),XOR(v2,v3)));
-  _mm256_store_si256((__m256i *)(hashes+ 4), XOR(XOR(v4,v5),XOR(v6,v7)));
-  _mm256_store_si256((__m256i *)(hashes+ 8), XOR(XOR(v8,v9),XOR(vA,vB)));
-  _mm256_store_si256((__m256i *)(hashes+12), XOR(XOR(vC,vD),XOR(vE,vF)));
+  _mm256_store_si256((__m256i *) hashes    , ROT17(XOR(XOR(v0,v1),XOR(v2,v3))));
+  _mm256_store_si256((__m256i *)(hashes+ 4), ROT17(XOR(XOR(v4,v5),XOR(v6,v7))));
+  _mm256_store_si256((__m256i *)(hashes+ 8), ROT17(XOR(XOR(v8,v9),XOR(vA,vB))));
+  _mm256_store_si256((__m256i *)(hashes+12), ROT17(XOR(XOR(vC,vD),XOR(vE,vF))));
 }
 
 #elif defined __SSE2__
@@ -194,7 +195,7 @@ void siphash24x4(const siphash_keys *keys, const uint64_t *indices, uint64_t *ha
 
 void siphash24xN(const siphash_keys *keys, const uint64_t *indices, uint64_t * hashes) {
 #if NSIPHASH == 1
-  *hashes = siphash24(keys, *indices);
+  *hashes = keys->siphash24(*indices);
 #elif NSIPHASH == 2
   siphash24x2(keys, indices, hashes);
 #elif NSIPHASH == 4
