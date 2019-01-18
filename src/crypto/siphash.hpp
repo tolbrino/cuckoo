@@ -27,7 +27,7 @@ public:
     v0 = sk.k0; v1 = sk.k1; v2 = sk.k2; v3 = sk.k3;
   }
   uint64_t xor_lanes() {
-    return (v0 ^ v1) ^ (v2  ^ v3);
+    return rotl((v0 ^ v1) ^ (v2  ^ v3), 17);
   }
   void xor_with(const siphash_state &x) {
     v0 ^= x.v0;
@@ -53,7 +53,7 @@ public:
     sip_round(); sip_round(); sip_round(); sip_round();
   }
 };
- 
+
 // set siphash keys from 32 byte char array
 void siphash_keys::setkeys(const char *keybuf) {
   k0 = htole64(((uint64_t *)keybuf)[0]);

@@ -18,7 +18,7 @@ compare () {
   RES2=`tmp/${BR2}/bin/${CMD} | grep Sol | wc -l`
   if [ $RES1 -ne $RES2 ]; then
     ERR=$(( $ERR + 1 ))
-    echo "ERROR: lean15 -n $N differs!!"
+    echo "ERROR: ${CMD} differs!!"
   else
     echo "OK: ${CMD}  (result: $RES1)"
   fi
@@ -33,7 +33,7 @@ echo "Comparing ${BR1} with ${BR2}"
 prepare_version ${BR1}
 prepare_version ${BR2}
 
-for H in "abcde_6" "abcde_97" "abcde_100"; do
+for H in "abcde_24" "abcde_104" ; do
   compare "lean15-generic     " $H
   compare "mean15-generic     " $H
 #  compare "lean29-generic -t 4" $H

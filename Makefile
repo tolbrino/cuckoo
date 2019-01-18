@@ -11,7 +11,7 @@ BINEXECS = $(addprefix $(BIN)/, $(EXECUTABLES))
 BIN = bin
 CUCKOO = src/cuckoo
 
-HDRS=$(CUCKOO)/cuckoo.h $(CUCKOO)/../crypto/siphash.h
+HDRS=$(CUCKOO)/cuckoo.h $(CUCKOO)/../crypto/siphash.hpp
 
 # Flags from upstream makefile
 OPT ?= -O3
@@ -43,7 +43,7 @@ distclean:
 	rm -rf bin
 
 # We want rules also for cuda29/lcuda29
-EXECUTABLES += lcuda29 cuda29
+EXECUTABLES += lcuda29 cuda29 cuda29_1
 
 .SECONDEXPANSION:
 .PHONY: $(EXECUTABLES)
@@ -78,6 +78,9 @@ $(CUCKOO)/lcuda29:	$(CUCKOO)/../crypto/siphash.cuh $(CUCKOO)/lean.cu
 
 $(CUCKOO)/cuda29:		$(CUCKOO)/../crypto/siphash.cuh $(CUCKOO)/mean.cu
 	(cd $(CUCKOO); $(NVCC) -o $(@F) -DEDGEBITS=29 -arch sm_35 mean.cu $(BLAKE_2B_SRC))
+
+$(CUCKOO)/cuda29_1:		$(CUCKOO)/../crypto/siphash.cuh $(CUCKOO)/mean.cu
+	(cd $(CUCKOO); $(NVCC) -o $(@F) -DNB=1 -DEDGEBITS=29 -arch sm_35 mean.cu $(BLAKE_2B_SRC))
 
 # Create the private dir
 $(BIN):
